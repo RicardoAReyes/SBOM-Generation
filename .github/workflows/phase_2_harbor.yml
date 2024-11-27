@@ -28,9 +28,8 @@ jobs:
           git --version
           git clone https://github.com/goharbor/harbor.git
           pwd
-          mv harbor harbor-${HARBOR_TAG}
-          pwd
-          ls -lha
+          cp -r harbor harbor-${HARBOR_TAG}
+          ls harbor-${HARBOR_TAG}
 
 
       - name: Generate SBOM with Trivy
