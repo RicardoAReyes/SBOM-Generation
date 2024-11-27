@@ -25,7 +25,6 @@ jobs:
 
       - name: Checkout Harbor
         run: |
-          cd /tmp/
           git clone https://github.com/goharbor/harbor.git
 
       - name: Generate SBOM with Trivy
