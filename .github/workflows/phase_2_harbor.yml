@@ -161,7 +161,7 @@ jobs:
       - name: Enrich Harbor CycloneDX
         run: |
           /tmp/parlay ecosystems enrich \
-            augmented-harbor-sbom-cyclonedx/augmented_habor-sbom.cdx.json > /tmp/enriched_harbor-sbom.cdx.json
+            augmented-harbor-sbom-cyclonedx/augmented_harbor-sbom.cdx.json > /tmp/enriched_harbor-sbom.cdx.json
 
       - name: Enrich Harbor SPDX
         run: |
@@ -169,13 +169,13 @@ jobs:
             augmented-harbor-sbom-spdx/augmented_harbor-sbom.spdx.json > /tmp/enriched_harbor-sbom.spdx.json
 
       - name: Upload Enriched SPDX SBOM
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: enriched-harbor-sbom-spdx
           path: "/tmp/enriched_harbor-sbom.spdx.json"
     
       - name: Upload Enriched CycloneDX SBOM
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: enriched-harbor-sbom-cyclonedx
           path: "/tmp/enriched_harbor-sbom.cdx.json"
@@ -186,13 +186,13 @@ jobs:
           cp /tmp/enriched_harbor-sbom.cdx.json /tmp/final_harbor-sbom.cdx.json
 
       - name: Upload Final SPDX SBOM
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: final-harbor-sbom-spdx
           path: "/tmp/final_harbor-sbom.spdx.json"
 
       - name: Upload Final CycloneDX SBOM
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4
+        uses: actions/upload-artifact@v4 # v4
         with:
           name: final-harbor-sbom-cyclonedx
           path: "/tmp/final_harbor-sbom.cdx.json"
