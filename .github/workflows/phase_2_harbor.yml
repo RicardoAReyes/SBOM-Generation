@@ -57,12 +57,15 @@ jobs:
         with:
           name: generated-harbor-sbom-cyclonedx
           path: "/tmp/generated-harbor-sbom.cdx.json"
+          if-no-files-found: error
 
       - name: Upload Generated SPDX SBOM
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4
         with:
           name: generated-harbor-sbom-spdx
           path: "/tmp/generated-harbor-sbom.spdx.json"
+          if-no-files-found: error
+          
   Augment:
     runs-on: ubuntu-latest
     needs: Generate
