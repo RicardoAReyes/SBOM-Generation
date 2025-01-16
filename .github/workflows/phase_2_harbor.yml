@@ -25,12 +25,10 @@ jobs:
 
       - name: Checkout Harbor
         run: |
-          git --version
-          git clone https://github.com/goharbor/harbor.git
-          pwd
-          cp -r harbor harbor-${HARBOR_TAG}
+          curl -L -o /tmp/harbor.tgz \
+            "https://github.com/goharbor/harbor/archive/refs/tags/${HARBOR_TAG}.tar.gz"
+          tar xvf /tmp/harbor.tgz -C harbor-${HARBOR_TAG}
           ls harbor-${HARBOR_TAG}
-
 
       - name: Generate SBOM with Trivy
         run: |
