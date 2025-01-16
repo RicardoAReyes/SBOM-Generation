@@ -27,8 +27,8 @@ jobs:
         run: |
           curl -L -o /tmp/harbor.tgz \
             "https://github.com/goharbor/harbor/archive/refs/tags/v${HARBOR_TAG}.tar.gz"
-          tar xvf /tmp/harbor.tgz -C harbor-${HARBOR_TAG}
-          ls harbor-${HARBOR_TAG}
+          tar xvf /tmp/harbor.tgz -C .
+          ls
 
       - name: Generate SBOM with Trivy
         run: |
