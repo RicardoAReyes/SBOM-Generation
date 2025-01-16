@@ -26,7 +26,7 @@ jobs:
       - name: Checkout Harbor
         run: |
           curl -L -o /tmp/harbor.tgz \
-            "https://github.com/goharbor/harbor/archive/refs/tags/harbor-${HARBOR_TAG}.tar.gz"
+            "https://github.com/goharbor/harbor/archive/refs/tags/v${HARBOR_TAG}.tar.gz"
           tar xvf /tmp/harbor.tgz -C harbor-${HARBOR_TAG}
           ls harbor-${HARBOR_TAG}
 
