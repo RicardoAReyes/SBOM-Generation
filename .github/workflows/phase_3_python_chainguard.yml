@@ -1,0 +1,438 @@
+---
+name: Phase 3 - Python Chainguard
+on:
+  push:
+    paths:
+      - .github/workflows/phase_3_python_chainguard.yml
+      - 'phase_3/python_chainguard/**'
+  workflow_dispatch:
+
+env:
+  PARLAY_VERSION: 0.6.0
+  SBOMASM_VERSION: 0.1.9
+  SBOMQS_VERSION: 0.2.3
+  SEMVER: 0.1.0
+  TRIVY_VERSION: 0.57.1
+  COSIGN_VERSION: 2.4.0
+  CRANE_VERSION: 0.19.1
+  CHAINCTL_VERSION: 0.120.0
+  SBOM_AUTHOR: "CISA Tiger Group for SBOM Generation Reference Implementations"
+  SBOM_SUPPLIER: "Chainguard Python with Libraries"
+  CHAINGUARD_IMAGE: "cgr.dev/chainguard-private/python:3.11-dev"
+
+jobs:
+  Build_and_Extract_SBOMs:
+    name: "Build Container and Extract SBOMs"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Install Trivy
+        run: |
+          curl -L -o /tmp/trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          tar xvf /tmp/trivy.tgz -C /tmp
+          chmod +x /tmp/trivy
+
+      - name: Install cosign
+        run: |
+          curl -L -o /tmp/cosign \
+            "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-amd64"
+          chmod +x /tmp/cosign
+
+      - name: Install crane
+        run: |
+          curl -L -o /tmp/crane.tar.gz \
+            "https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          tar xvf /tmp/crane.tar.gz -C /tmp
+          chmod +x /tmp/crane
+
+      # For CI/CD, we'll use public PyPI instead of local Nexus
+      # In production with a reachable Nexus, you would configure authentication here
+      - name: Configure pip for CI/CD (Public PyPI fallback)
+        working-directory: "phase_3/python_chainguard"
+        run: |
+          # In CI/CD, we use public PyPI as fallback since local Nexus isn't available
+          # To use Chainguard Libraries, you would set up authentication with secrets:
+          # echo "machine libraries.cgr.dev login ${{ secrets.CHAINGUARD_LIBRARIES_USER }} password ${{ secrets.CHAINGUARD_LIBRARIES_TOKEN }}" > .netrc
+
+          # For this demo, modify pip.conf to use public PyPI
+          cat > pip.conf << 'EOF'
+          [global]
+          index-url = https://pypi.org/simple
+          timeout = 60
+
+          [install]
+          disable-pip-version-check = true
+          EOF
+
+          echo "Using public PyPI for CI/CD demo"
+
+      - name: Authenticate with Chainguard Registry
+        if: github.event_name != 'pull_request'
+        run: |
+          # In production, use GitHub secrets for Chainguard registry authentication
+          # echo "${{ secrets.CHAINGUARD_REGISTRY_TOKEN }}" | docker login cgr.dev -u "${{ secrets.CHAINGUARD_REGISTRY_USER }}" --password-stdin
+
+          echo "Note: Chainguard private registry authentication would happen here"
+          echo "For demo purposes, we'll use public Chainguard images"
+
+      - name: Build Docker image with Chainguard base
+        working-directory: "phase_3/python_chainguard"
+        env:
+          # Use public Chainguard image for demo
+          DOCKER_BUILDKIT: 1
+        run: |
+          # For CI/CD demo, use public Python image
+          # In production with Chainguard private registry access, use cgr.dev/chainguard-private/python:3.11-dev
+
+          # Temporarily modify Dockerfile to use public image for demo
+          sed -i 's|cgr.dev/chainguard-private/python:3.11-dev|cgr.dev/chainguard/python:latest-dev|g' Dockerfile
+
+          docker build \
+            --build-arg NEXUS_HOST=pypi.org \
+            --build-arg PIP_INDEX_URL=https://pypi.org/simple/ \
+            -t phase-3-python-chainguard:latest \
+            .
+
+      - name: Extract Chainguard Base Image SBOM
+        run: |
+          # Try to extract SBOM from Chainguard image attestations
+          echo "Attempting to extract SBOM from Chainguard image attestations..."
+
+          PUBLIC_IMAGE="cgr.dev/chainguard/python:latest-dev"
+          docker pull $PUBLIC_IMAGE
+
+          # Try cosign attestation extraction
+          /tmp/cosign download attestation $PUBLIC_IMAGE > /tmp/chainguard-attestation.json 2>&1 || echo "No attestation via cosign"
+
+          # Check if we got valid attestation
+          if [ -s /tmp/chainguard-attestation.json ] && grep -q "payload" /tmp/chainguard-attestation.json; then
+            echo "SBOM found in attestation, extracting..."
+            cat /tmp/chainguard-attestation.json | jq -r '.payload' | base64 -d | jq '.predicate' > /tmp/chainguard-base-sbom.cdx.json 2>&1 || true
+          fi
+
+          # Fallback: Generate with Trivy
+          if [ ! -s /tmp/chainguard-base-sbom.cdx.json ]; then
+            echo "Generating SBOM with Trivy as fallback..."
+            /tmp/trivy image \
+              --format cyclonedx \
+              --output /tmp/chainguard-base-sbom.cdx.json \
+              $PUBLIC_IMAGE
+          fi
+
+          echo "Chainguard base SBOM extracted/generated"
+
+      - name: Generate Application SBOM from requirements.txt
+        working-directory: "phase_3/python_chainguard"
+        run: |
+          echo "Generating Application SBOM for aiohttp dependencies..."
+
+          /tmp/trivy fs \
+            --format cyclonedx \
+            --output /tmp/application-sbom.cdx.json \
+            requirements.txt
+
+          /tmp/trivy fs \
+            --format spdx-json \
+            --output /tmp/application-sbom.spdx.json \
+            requirements.txt
+
+      - name: Generate Container SBOM (Full Image)
+        run: |
+          echo "Generating complete container SBOM..."
+
+          /tmp/trivy image \
+            --format cyclonedx \
+            --output /tmp/container-sbom.cdx.json \
+            phase-3-python-chainguard:latest
+
+          /tmp/trivy image \
+            --format spdx-json \
+            --output /tmp/container-sbom.spdx.json \
+            phase-3-python-chainguard:latest
+
+      - name: Scan for Vulnerabilities
+        run: |
+          echo "Scanning for vulnerabilities in final image..."
+          /tmp/trivy image \
+            --format table \
+            phase-3-python-chainguard:latest | tee /tmp/vulnerability-report.txt
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: generated-sboms
+          path: |
+            /tmp/chainguard-base-sbom.cdx.json
+            /tmp/application-sbom.cdx.json
+            /tmp/application-sbom.spdx.json
+            /tmp/container-sbom.cdx.json
+            /tmp/container-sbom.spdx.json
+            /tmp/vulnerability-report.txt
+
+  Augment:
+    name: "Augment SBOMs with Metadata"
+    runs-on: ubuntu-latest
+    needs: [Build_and_Extract_SBOMs]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Download generated SBOMs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+
+      - name: Install sbomasm
+        run: |
+          curl -L -o /tmp/sbomasm \
+            "https://github.com/interlynk-io/sbomasm/releases/download/v${SBOMASM_VERSION}/sbomasm-linux-amd64"
+          chmod +x /tmp/sbomasm
+
+      - name: Augment Chainguard Base SBOM
+        run: |
+          echo "Augmenting Chainguard base SBOM with metadata..."
+
+          /tmp/sbomasm edit \
+            --subject Document \
+            --author "$SBOM_AUTHOR" \
+            --supplier "Chainguard, Inc." \
+            --repository 'https://github.com/chainguard-images/images' \
+            --license 'Apache-2.0' \
+            generated-sboms/chainguard-base-sbom.cdx.json > /tmp/augmented_chainguard-base-sbom.cdx.json
+
+      - name: Augment Application SBOM (CycloneDX)
+        run: |
+          echo "Augmenting application SBOM with metadata..."
+
+          /tmp/sbomasm edit \
+            --subject Document \
+            --name phase3-python-chainguard-aiohttp \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --lifecycle build \
+            --license 'Apache-2.0' \
+            generated-sboms/application-sbom.cdx.json > /tmp/augmented_application-sbom.cdx.tmp
+
+          /tmp/sbomasm edit \
+            --subject primary-component \
+            --name phase3-python-chainguard-aiohttp \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --version "$GITHUB_SHA" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --license 'Apache-2.0' \
+            /tmp/augmented_application-sbom.cdx.tmp > /tmp/augmented_application-sbom.cdx.json
+
+      - name: Augment Container SBOM (CycloneDX)
+        run: |
+          echo "Augmenting container SBOM with metadata..."
+
+          /tmp/sbomasm edit \
+            --subject Document \
+            --name phase3-python-chainguard-container \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --license 'Apache-2.0' \
+            generated-sboms/container-sbom.cdx.json > /tmp/augmented_container-sbom.cdx.tmp
+
+          /tmp/sbomasm edit \
+            --subject primary-component \
+            --name phase3-python-chainguard-container \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --version "$GITHUB_SHA" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --license 'Apache-2.0' \
+            /tmp/augmented_container-sbom.cdx.tmp > /tmp/augmented_container-sbom.cdx.json
+
+      - name: Augment SPDX Application SBOM
+        run: |
+          /tmp/sbomasm edit \
+            --append \
+            --subject Document \
+            --name phase3-python-chainguard-aiohttp \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --lifecycle build \
+            --license 'Apache-2.0' \
+            generated-sboms/application-sbom.spdx.json > /tmp/augmented_application-sbom.spdx.tmp
+
+          /tmp/sbomasm edit \
+            --subject primary-component \
+            --name phase3-python-chainguard-aiohttp \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --version "$GITHUB_SHA" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --license 'Apache-2.0' \
+            /tmp/augmented_application-sbom.spdx.tmp > /tmp/augmented_application-sbom.spdx.json
+
+      - name: Augment SPDX Container SBOM
+        run: |
+          /tmp/sbomasm edit \
+            --append \
+            --subject Document \
+            --name phase3-python-chainguard-container \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --license 'Apache-2.0' \
+            generated-sboms/container-sbom.spdx.json > /tmp/augmented_container-sbom.spdx.tmp
+
+          /tmp/sbomasm edit \
+            --subject primary-component \
+            --name phase3-python-chainguard-container \
+            --author "$SBOM_AUTHOR" \
+            --supplier "$SBOM_SUPPLIER" \
+            --version "$GITHUB_SHA" \
+            --repository 'https://github.com/CISA-SBOM-Community/SBOM-Generation' \
+            --license 'Apache-2.0' \
+            /tmp/augmented_container-sbom.spdx.tmp > /tmp/augmented_container-sbom.spdx.json
+
+      - name: Upload Augmented SBOMs
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: augmented-sboms
+          path: "/tmp/augmented_*.json"
+
+  Enrich:
+    name: "Enrich SBOMs (Main Focus)"
+    runs-on: ubuntu-latest
+    needs: [Augment]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Download augmented SBOMs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+
+      - name: Install parlay
+        run: |
+          curl -Ls https://github.com/snyk/parlay/releases/download/v${PARLAY_VERSION}/parlay_Linux_x86_64.tar.gz | tar xvz -C /tmp
+          chmod +x /tmp/parlay
+
+      - name: "⭐ Enrich Chainguard Base SBOM"
+        run: |
+          echo "=========================================="
+          echo "Enriching Chainguard Base Image SBOM"
+          echo "Adding NTIA minimum elements and component metadata"
+          echo "=========================================="
+
+          /tmp/parlay ecosystems enrich \
+            augmented-sboms/augmented_chainguard-base-sbom.cdx.json > /tmp/enriched_chainguard-base-sbom.cdx.json
+
+          echo "✓ Chainguard base SBOM enriched"
+
+      - name: "⭐ Enrich Application SBOM (CycloneDX)"
+        run: |
+          echo "=========================================="
+          echo "Enriching Application SBOM (aiohttp)"
+          echo "Adding component metadata from PyPI and vulnerability databases"
+          echo "=========================================="
+
+          /tmp/parlay ecosystems enrich \
+            augmented-sboms/augmented_application-sbom.cdx.json > /tmp/enriched_application-sbom.cdx.json
+
+          echo "✓ Application SBOM enriched"
+
+      - name: "⭐ Enrich Container SBOM (CycloneDX)"
+        run: |
+          echo "=========================================="
+          echo "Enriching Complete Container SBOM"
+          echo "Adding comprehensive metadata for all layers"
+          echo "=========================================="
+
+          /tmp/parlay ecosystems enrich \
+            augmented-sboms/augmented_container-sbom.cdx.json > /tmp/enriched_container-sbom.cdx.json
+
+          echo "✓ Container SBOM enriched"
+
+      - name: "⭐ Enrich SPDX SBOMs"
+        run: |
+          echo "Enriching SPDX format SBOMs..."
+
+          /tmp/parlay ecosystems enrich \
+            augmented-sboms/augmented_application-sbom.spdx.json > /tmp/enriched_application-sbom.spdx.json
+
+          /tmp/parlay ecosystems enrich \
+            augmented-sboms/augmented_container-sbom.spdx.json > /tmp/enriched_container-sbom.spdx.json
+
+          echo "✓ SPDX SBOMs enriched"
+
+      - name: Upload Enriched SBOMs
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4
+        with:
+          name: enriched-sboms
+          path: "/tmp/enriched_*.json"
+
+  Verify:
+    name: "Verify SBOM Quality"
+    needs: Enrich
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Download all SBOMs
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
+
+      - name: Install sbomqs
+        run: |
+          curl -L -o /tmp/sbomqs \
+            "https://github.com/interlynk-io/sbomqs/releases/download/v${SBOMQS_VERSION}/sbomqs-linux-amd64"
+          chmod +x /tmp/sbomqs
+
+      - name: "Display SBOM Quality Scores"
+        run: |
+          echo "# 📊 SBOM Quality Scores - Chainguard Python Enrichment Demo" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "## Overview" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "This workflow demonstrates SBOM enrichment using:" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **Base Image**: Chainguard Python (cgr.dev/chainguard/python:latest-dev)" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **Application**: aiohttp web server" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **Dependencies**: aiohttp, requests, and supporting libraries" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **Enrichment**: Parlay ecosystem enrichment with NTIA minimum elements" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "## Quality Scores" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "\`\`\`" >> ${GITHUB_STEP_SUMMARY}
+
+          echo "=== ENRICHED SBOMs (After Enrichment) ===" >> ${GITHUB_STEP_SUMMARY}
+          for SBOM in $(find enriched-sboms -iname "*.json" | sort); do
+            echo "" >> ${GITHUB_STEP_SUMMARY}
+            echo "--- $(basename $SBOM) ---" >> ${GITHUB_STEP_SUMMARY}
+            /tmp/sbomqs score "$SBOM" >> ${GITHUB_STEP_SUMMARY} 2>&1 || echo "Score calculation failed for $SBOM" >> ${GITHUB_STEP_SUMMARY}
+          done
+
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "=== AUGMENTED SBOMs (Before Enrichment - for comparison) ===" >> ${GITHUB_STEP_SUMMARY}
+          for SBOM in $(find augmented-sboms -iname "*application*.json" | head -1); do
+            echo "" >> ${GITHUB_STEP_SUMMARY}
+            echo "--- $(basename $SBOM) (baseline) ---" >> ${GITHUB_STEP_SUMMARY}
+            /tmp/sbomqs score "$SBOM" >> ${GITHUB_STEP_SUMMARY} 2>&1 || echo "Score calculation failed for $SBOM" >> ${GITHUB_STEP_SUMMARY}
+          done
+
+          echo "\`\`\`" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "## Key Metrics" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "Expected improvements from enrichment:" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **NTIA Minimum Elements**: Should reach 90%+ compliance" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **Component Metadata**: Improved license, CPE, and PURL coverage" >> ${GITHUB_STEP_SUMMARY}
+          echo "- **Vulnerability Context**: Enhanced CVE and security metadata" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "---" >> ${GITHUB_STEP_SUMMARY}
+          echo "*Generated by Phase 3 Python Chainguard Workflow*" >> ${GITHUB_STEP_SUMMARY}
+
+      - name: Compare SBOM Sizes
+        run: |
+          echo "## 📦 SBOM File Sizes" >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "\`\`\`" >> ${GITHUB_STEP_SUMMARY}
+          echo "Before Enrichment (Augmented):" >> ${GITHUB_STEP_SUMMARY}
+          du -h augmented-sboms/*.json | sort >> ${GITHUB_STEP_SUMMARY}
+          echo "" >> ${GITHUB_STEP_SUMMARY}
+          echo "After Enrichment:" >> ${GITHUB_STEP_SUMMARY}
+          du -h enriched-sboms/*.json | sort >> ${GITHUB_STEP_SUMMARY}
+          echo "\`\`\`" >> ${GITHUB_STEP_SUMMARY}
